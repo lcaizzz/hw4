@@ -1,0 +1,126 @@
+---
+title: "hw4"
+author: "Le Cai"
+date: "2024-12-9"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+     
+```
+
+
+
+```{r}
+#install.packages("randomForest")
+library(caret)
+library(tidyverse)
+library(readr)
+library(shiny)
+#library(glue)
+#library(bslib)
+library(DT)
+library(ggplot2)
+library(plotly)
+library(randomForest)
+library(rpart)
+data <- read_csv("https://uwmadison.box.com/shared/static/46vjlcoblp2hsl1w0d5ws90mpde82g5k.csv")
+#data <- data[1:100, ]
+```
+
+
+```{r}
+numeric_data <- data %>%
+  select_if(is.numeric) %>%
+  select(-ID,-year, -Status)%>%
+  mutate(loan_amount = log(loan_amount + 1)) %>%
+  na.omit()
+
+set.seed(123)  # for reproducibility
+numeric_data <- numeric_data[sample(1:nrow(numeric_data), 10000), ]
+
+#numeric_data_scaled <- numeric_data %>%mutate(across(everything(), scale))
+
+rf_model <- randomForest(loan_amount ~ ., data = numeric_data, ntree = 100, importance = TRUE)
+
+importance_df <- as.data.frame(importance(rf_model)) %>%
+  rownames_to_column(var = "Feature") %>%
+  arrange(desc(IncNodePurity))%>%
+  na.omit()
+```
+
+
+
+```{r}
+ui <- fluidPage(
+  titlePanel("Loan info - Interactive Scatterplot with Regression Line"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("num_features", 
+                  "Select number of most important features (generated from Random Forest):",
+                  min = 1, 
+                  max = n_distinct(importance_df$Feature), 
+                  value = 1, 
+                  step = 1),
+      checkboxGroupInput("features", 
+                         "Select features for scatterplot:",
+                         choices = NULL,  
+                         selected = NULL,
+                         inline = TRUE),
+      helpText("Select up EXACTLY 1 features for the scatterplot.")
+    ),
+    
+    mainPanel(
+      plotOutput("scatterplot")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+
+  reactive_top_features <- reactive({
+    n <- input$num_features
+    top_features <- importance_df %>%
+      head(n) %>%
+      select(Feature)
+    
+    top_features$Feature <- gsub("LTV", "Loan-to-Value (LTV)", top_features$Feature)
+    top_features$Feature <- gsub("dtir1", "Debt-to-Income Ratio (dtir1)", top_features$Feature)
+    
+    return(top_features)
+  })
+  
+  observe({
+    top_features <- reactive_top_features()
+    updateCheckboxGroupInput(session, "features", 
+                             choices = top_features$Feature,
+                             selected = top_features$Feature[1])
+  })
+  
+  output$scatterplot <- renderPlot({
+    if(length(input$features) == 1) {
+      feature <- input$features[1]
+      scaled_data <- numeric_data %>%
+      mutate(
+        scaled_feature = scale(.data[[feature]]),
+        scaled_loan_amount = scale(loan_amount))
+      ggplot(data = scaled_data, aes(x = scaled_feature, y = scaled_loan_amount)) +
+        geom_point() +
+        geom_smooth(method = "lm", se = FALSE, color = "blue", linetype = "solid") +
+        labs(x = feature, y = "Loan Amount", title = paste("Scatterplot of", feature, "vs Loan Amount")) +
+        theme_minimal()} 
+    else {
+      ggplot() + 
+        annotate("text", x = 1, y = 1, label = "Please select exactly 1 features", size = 5, color = "red") +
+        theme_void()
+    }
+  })
+}
+
+shinyApp(ui = ui, server = server)
+```
+
+
+
